@@ -10,7 +10,7 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///habits.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# хранит данные в сессии, без него flask_login не работает
+# stores data in the session, without it flask_login does not work
 app.secret_key = "secret"
 
 login_manager = LoginManager()
