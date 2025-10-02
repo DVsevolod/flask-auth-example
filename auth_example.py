@@ -1,14 +1,14 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-
 from functools import wraps
-from flask import abort
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from flask import abort, Flask, jsonify, redirect, request, url_for
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import current_user, login_user, login_required, logout_user, LoginManager, UserMixin
+from flask_migrate import Migrate
 
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///habits.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # stores data in the session, without it flask_login does not work
 app.secret_key = "secret"
@@ -18,13 +18,15 @@ login_manager.init_app(app)
 login_manager.login_view = "login"
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # ---- simple User ----
-class User(UserMixin, db.Model):
+class BaseUser(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String, nullable=False)
     role = db.Column(db.String, nullable=False)
+    password_hash = db.Column(db.String, nullable=False, default="000")
 
     def has_permission(self, perm):
         role_perms = {
@@ -34,26 +36,33 @@ class User(UserMixin, db.Model):
         }
         return perm in role_perms.get(self.role, [])
 
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
 
 class DBAdapter:
     @staticmethod
-    def create_user(name, role):
-        user = User(name=name, role=role)
+    def create_user(name, role, password):
+        user = BaseUser(name=name, role=role)
+        user.set_password(password)
         db.session.add(user)
         db.session.commit()
         return user
 
     @staticmethod
     def list_users():
-        return User.query.all()
+        return BaseUser.query.all()
 
     @staticmethod
     def get_user_by_name(username):
-        return User.query.filter_by(name=username).first_or_404()
+        return BaseUser.query.filter_by(name=username).first_or_404()
 
     @staticmethod
     def get_user_by_id(user_id):
-        return User.query.get(user_id)
+        return BaseUser.query.get(user_id)
 
 
 # decorator to check permission
@@ -73,28 +82,59 @@ def load_user(user_id):
     return DBAdapter.get_user_by_id(user_id)
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
+@app.route("/register", methods=["GET", "POST"])
+def register():
     if request.method == "POST":
         username = request.form["username"]
-        user = DBAdapter.get_user_by_name(username)
+        password = request.form["password"]
+        role = request.form["role"]
+        user = DBAdapter.create_user(name=username, role=role, password=password)
+
         if user:
             login_user(user)
             return redirect(url_for("protected"))
 
     if request.method == "GET":
         return '''
-            <form method="post">
-                <input type="text" name="username">
-                <input type="submit" value="Login">
+            <form method="post" style="text-align:center; margin-top:50px;">
+                <h2>Registration page</h2>
+                <input type="text" name="username" placeholder="Username">
+                
+                <input type="password" name="password" placeholder="Password">
+                
+                <label for="role">Role:</label>
+                <select name="role" id="role">
+                    <option value="admin">admin</option>
+                    <option value="editor">editor</option>
+                    <option value="user" selected>user</option>
+                </select><br><br>
+                
+                <input type="submit" value="Sign Up">
             </form>
         '''
 
 
-@app.route("/protected")
-@login_required
-def protected():
-    return jsonify({"msg": f"greetings, {current_user.name}. your role is {current_user.role}."})
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+
+        user = DBAdapter.get_user_by_name(username)
+
+        if user and user.check_password(password):
+            login_user(user)
+            return redirect(url_for("protected"))
+
+    if request.method == "GET":
+        return '''
+            <form method="post" style="text-align:center; margin-top:50px;">
+                <h2>Login page</h2>
+                <input type="text" name="username" placeholder="Username">
+                <input type="password" name="password" placeholder="Password">
+                <input type="submit" value="Login">
+            </form>
+        '''
 
 
 @app.route("/logout")
@@ -104,27 +144,18 @@ def logout():
     return {"msg": "Logged out!"}
 
 
-@app.route("/users", methods=['GET', 'POST'])
+@app.route("/protected")
+@login_required
+def protected():
+    return jsonify({"msg": f"greetings, {current_user.name}. your role is {current_user.role}."})
+
+
+@app.route("/users", methods=['GET'])
 def list_create_api_view():
-    if request.method == 'GET':
-        return jsonify([
-            {"id": user.id, "name": user.name, "role": user.role}
-            for user in DBAdapter.list_users()
-        ])
-
-    elif request.method == 'POST':
-        data = request.get_json()
-        name = data.get('name')
-        role = data.get('role')
-
-        if None in [name, role]:
-            return jsonify({"status": "error", "msg": f"wrong data, name={name}, role={role}"})
-
-        user = DBAdapter.create_user(name, role)
-        if not user:
-            return jsonify({"status": "error", "msg": "error while creating user"})
-
-        return jsonify({"status": "success", "user_id": user.id, "user_name": user.name, "user_role": user.role})
+    return jsonify([
+        {"id": user.id, "name": user.name, "role": user.role}
+        for user in DBAdapter.list_users()
+    ])
 
 
 @app.route("/admin")
