@@ -20,6 +20,11 @@ login_manager.login_view = "login"
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+
+@login_manager.user_loader
+def load_user(user_id):
+    return DBAdapter.get_user_by_id(user_id)
+
 # ---- simple User ----
 class BaseUser(UserMixin, db.Model):
     __tablename__ = 'users'
@@ -75,11 +80,6 @@ def role_required(role):
             return f(*args, **kwargs)
         return decorated
     return wrapper
-
-
-@login_manager.user_loader
-def load_user(user_id):
-    return DBAdapter.get_user_by_id(user_id)
 
 
 @app.route("/register", methods=["GET", "POST"])
